@@ -61,17 +61,31 @@ class train_dataset_loader(Dataset):
         audio = loadWAV(self.data_list[index], self.max_frames, evalmode=False)
 
         if self.augment:
-            ###########################################################
-            # Here is your code
+            augtype = random.randint(0, 5)
 
-            pass
-            
-            ###########################################################
+            if augtype == 0:
+                audio = audio
+
+            elif augtype == 1:
+                audio = self.augment_wav.reverberate(audio)
+
+            elif augtype == 2:
+                audio = self.augment_wav.additive_noise("music", audio)
+
+            elif augtype == 3:
+                audio = self.augment_wav.additive_noise("speech", audio)
+
+            elif augtype == 4:
+                audio = self.augment_wav.additive_noise("noise", audio)
+
+            elif augtype == 5:
+                audio = self.augment_wav.additive_noise("speech", audio)
+                audio = self.augment_wav.additive_noise("music", audio)
 
         return torch.FloatTensor(audio), self.data_label[index]
 
     def __len__(self):
-        
+            
         return len(self.data_list)
     
 class test_dataset_loader(Dataset):
@@ -131,7 +145,7 @@ class WhisperEncoder(nn.Module):
         x = x.squeeze(1)
         x = F.gelu(self.conv1(x))
         x = F.gelu(self.conv2(x))
-        x = x.permute(0, 2, 1)
+        x = x.permute(0, 2, 1) ## (Batch, Channels, Time)
 
         x = (x + self.positional_embedding[: x.shape[1], ...]).to(x.dtype)
 
@@ -227,7 +241,7 @@ class StatPoolMode(Enum):
     V = 1
     MV = 2
 
-class StatPoolLayer(nn.Module):
+class StatPoolLayer(nn.Module): ## Усредняет информацию по времени.
     # Statisctics pooling layer
 
     @classmethod
@@ -303,7 +317,7 @@ class MaxoutSegmentLevel(nn.Module):
 
         return x
     
-class SSLDownstream(nn.Module):
+class SSLDownstream(nn.Module): ## Экстрактор
     # Full speaker embedding extractor
 
     def __init__(
@@ -340,7 +354,9 @@ class SSLDownstream(nn.Module):
             
         ###########################################################
         # Here is your code
-
+        x = self.frame_level(x)
+        x = self.pooling_level(x)
+        x = self.segment_level(x) ## Финальный эмбеддинг
         ###########################################################
         
         return x
@@ -359,7 +375,7 @@ class MainModel(nn.Module):
         data = data.reshape(-1, data.size()[-1]).cuda() 
         outp = self.__S__.forward(data)
 
-        if label == None:
+        if label is None:
             
             return outp
 
@@ -381,8 +397,8 @@ def train_network(train_loader, main_model, optimizer, scheduler, num_epoch, ver
     stepsize = train_loader.batch_size
 
     loss    = 0
-    top1    = 0
-    counter = 0
+    top1    = 0  ## Сумма точностей по батчам
+    counter = 0  ## Подсчет батчей
     index   = 0
 
     for data, data_label in train_loader:
@@ -392,7 +408,21 @@ def train_network(train_loader, main_model, optimizer, scheduler, num_epoch, ver
 
         ###########################################################
         # Here is your code
+        optimizer.zero_grad()
 
+        nloss, prec1 = main_model(data, label)
+
+        nloss.backward()
+        optimizer.step() ## обновляем веса
+
+        loss += nloss.detach().cpu().item()
+
+        if torch.is_tensor(prec1):
+            top1 += prec1.detach().cpu().item()
+        else:
+            top1 += float(prec1)
+
+        counter += 1
         ###########################################################
         
         if verbose:
@@ -421,7 +451,17 @@ def test_network(test_loader, main_model):
 
         ###########################################################
         # Here is your code
+        with torch.no_grad():
+            nloss, prec1 = main_model(data, label)  ## Без обучения и обнуления град-ов
 
+        loss += nloss.detach().cpu().item()
+
+        if torch.is_tensor(prec1):
+            top1 += prec1.detach().cpu().item()
+        else:
+            top1 += float(prec1)
+
+        counter += 1
         ###########################################################
         
     return (loss/counter, top1/counter)

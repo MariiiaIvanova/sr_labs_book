@@ -55,8 +55,15 @@ class train_dataset_loader(Dataset):
         if self.augment:
             ###########################################################
             # Here is your code
-
-            pass
+            augtype = random.randint(0, 4)  # 0 - без аугментации
+            if augtype == 1:
+                audio = self.augment_wav.reverberate(audio)
+            elif augtype == 2:
+                audio = self.augment_wav.additive_noise('music', audio)
+            elif augtype == 3:
+                audio = self.augment_wav.additive_noise('speech', audio)
+            elif augtype == 4:
+                audio = self.augment_wav.additive_noise('noise', audio)
             
             ###########################################################
             
@@ -210,8 +217,44 @@ class ResNet(nn.Module):
                 x = self.instancenorm(x).unsqueeze(1)
 
         ###########################################################
-        # Here is your code
-
+        # Here is your code        
+        # Сверточный слой
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        
+        # Четыре уровня ResNet блоков
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+        
+        # Подготовка к статистическому пулингу
+        batch_size, channels, freq, time = x.size()
+        x = x.view(batch_size, channels * freq, time)
+        
+        # Статистический пулинг
+        if self.encoder_type == "SP":
+            # Статистический пулинг: среднее и стандартное отклонение
+            mean = torch.mean(x, dim=2) 
+            std = torch.std(x, dim=2)  
+            x = torch.cat((mean, std), dim=1)  
+            
+        elif self.encoder_type == "ASP":
+            # Attentive Statistical Pooling
+            w = self.attention(x) 
+            
+            # Взвешенное среднее
+            mu = torch.sum(x * w, dim=2)  
+            
+            # Взвешенное стандартное отклонение
+            sigma_sq = torch.sum((x**2) * w, dim=2) - mu**2
+            sigma = torch.sqrt(torch.clamp(sigma_sq, min=1e-10))
+            
+            x = torch.cat((mu, sigma), dim=1)  
+        
+        # Полносвязный слой для получения эмбеддингов
+        x = self.fc(x)
         ###########################################################
 
         return x
@@ -261,7 +304,26 @@ def train_network(train_loader, main_model, optimizer, scheduler, num_epoch, ver
         
         ###########################################################
         # Here is your code
-
+        # Подготовка данных
+        data = data.cuda()  # Перенос на GPU
+        data_label = data_label.cuda()  # Перенос меток на GPU
+        
+        # Обнуление градиентов
+        optimizer.zero_grad()
+        
+        # Прямой проход
+        nloss, prec1 = main_model(data, data_label)
+        
+        # Обратное распространение
+        nloss.backward()
+        
+        # Обновление весов
+        optimizer.step()
+        
+        # Сбор статистики
+        loss += nloss.detach().cpu().item()
+        top1 += prec1.detach().cpu().item()
+        counter += 1
         ###########################################################
         
         if verbose:
@@ -288,7 +350,19 @@ def test_network(test_loader, main_model):
         
         ###########################################################
         # Here is your code
+        # Подготовка данных
+        data = data.cuda()  # Перенос на GPU
+        data_label = data_label.cuda()  # Перенос меток на GPU
         
+        # Отключаем вычисление градиентов для ускорения
+        with torch.no_grad():
+            # 3. Прямой проход
+            nloss, prec1 = main_model(data, data_label)
+        
+        # Сбор статистики
+        loss += nloss.detach().cpu().item()
+        top1 += prec1.detach().cpu().item()
+        counter += 1        
         ###########################################################
 
     return (loss/counter, top1/counter)

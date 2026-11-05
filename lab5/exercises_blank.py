@@ -126,7 +126,72 @@ def s_norm(test_data, lines, adapt_data, N_s=200, eps=0.5):
     
     ###########################################################
     # Here is your code
-    
+
+    enroll_idx = {enr: i for i, enr in enumerate(enroll_list)}
+    test_idx   = {tst: i for i, tst in enumerate(test_list)}
+    adapt_idx  = {a: i for i, a in enumerate(adapt_list)}
+
+    enroll_spk = {enr: enr.split('/')[0] for enr in enroll_list}
+    test_spk   = {tst: tst.split('/')[0] for tst in test_list}
+    adapt_spk  = {a: a.split('/')[0] for a in adapt_list}
+
+    E_norm = E / np.linalg.norm(E, axis=1, keepdims=True)
+    T_norm = T / np.linalg.norm(T, axis=1, keepdims=True)
+    A_norm = A / np.linalg.norm(A, axis=1, keepdims=True)
+
+    scores_E_A = E_norm @ A_norm.T
+    scores_T_A = T_norm @ A_norm.T
+
+    # Получение mu, sigma
+    def compute_cohort_stats(scores_row, spk_id, adapt_spk_list, N_s, eps):
+        mask = np.array([adapt_spk_list[i] != spk_id for i in range(len(adapt_spk_list))])
+        filtered = scores_row[mask]
+
+        top_idx = np.argsort(-filtered)[:N_s]  # берем топ
+        top_scores = filtered[top_idx]
+
+        mu = top_scores.mean()
+        sigma = top_scores.std() + eps #############
+
+        return mu, sigma
+
+    adapt_spk_list = [adapt_spk[a] for a in adapt_list]
+
+    # mu, sigma для эталона
+    enroll_stats = {}
+    for enr in enroll_list:
+        i = enroll_idx[enr]
+        spk = enroll_spk[enr]
+        mu, sigma = compute_cohort_stats(scores_E_A[i], spk, adapt_spk_list, N_s, eps)
+        enroll_stats[enr] = (mu, sigma)
+
+    # mu, sigma для теста 
+    test_stats = {}
+    for tst in test_list:
+        j = test_idx[tst]
+        spk = test_spk[tst]
+        mu, sigma = compute_cohort_stats(scores_T_A[j], spk, adapt_spk_list, N_s, eps)
+        test_stats[tst] = (mu, sigma)
+
+    for line in lines:
+        parts = line.strip().split()
+        label = int(parts[0])
+        enr = parts[1]
+        tst = parts[2]
+        
+        e = E_norm[enroll_idx[enr]]
+        t = T_norm[test_idx[tst]]
+        S = float(e @ t)
+        
+        mu_e, sigma_e = enroll_stats[enr]
+        mu_t, sigma_t = test_stats[tst]
+        
+        S_hat = (S - mu_e) / (2.0 * sigma_e) + (S - mu_t) / (2.0 * sigma_t)
+        
+        scores_adapted.append(S_hat)
+        all_labels.append(label)
+        all_trials.append((enr, tst))
+
     ###########################################################
 
     return scores_adapted, all_labels, all_trials
@@ -161,7 +226,7 @@ class LinearCalibrationModel(torch.nn.Module):
         
         ###########################################################
         # Here is your code
-            
+        calib_x = self.calib_params(x)  # a·S + b, a - вес, b - смещение
         ###########################################################
 
         return calib_x
@@ -190,7 +255,12 @@ class CalibrationLoss(nn.Module):
         
         ###########################################################
         # Here is your code
+        T_act = -self.alpha  # log((1 - ptar) / ptar) - оптимальный порог
 
+        loss_tar = self.ptar * negative_log_sigmoid(target_llrs - T_act).mean()
+        loss_imp = (1 - self.ptar) * negative_log_sigmoid(T_act - nontarget_llrs).mean()
+
+        loss_value = loss_tar + loss_imp        
         ###########################################################
 
         return loss_value
@@ -208,7 +278,15 @@ def train_calibration(train_loader, model, criterion, optimizer, scheduler, num_
             
             ###########################################################
             # Here is your code
-            
+            optimizer.zero_grad()
+
+            tar_llrs = model(tar_sc.transpose(0, 1))
+            imp_llrs = model(imp_sc.transpose(0, 1))
+
+            loss = criterion(tar_llrs, imp_llrs)
+
+            loss.backward()
+            optimizer.step()
             ###########################################################
                             
         lr_value = optimizer.param_groups[0]['lr']

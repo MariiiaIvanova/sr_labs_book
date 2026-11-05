@@ -15,7 +15,20 @@ def load_vad_markup(path_to_rttm, signal, fs):
         
     ###########################################################
     # Here is your code
-    
+    with open(path_to_rttm, 'r') as f:
+        for line in f:
+            if line.strip() == '':
+                continue
+            parts = line.strip().split()
+            start_time = float(parts[3])
+            duration   = float(parts[4])
+            
+            start_sample = int(start_time * fs)
+            end_sample   = int((start_time + duration) * fs)
+
+            end_sample = min(end_sample, len(signal))
+            
+            vad_markup[start_sample:end_sample] = 1.0    
     ###########################################################
     
     return vad_markup
@@ -24,11 +37,16 @@ def framing(signal, window=320, shift=160):
     # Function to create frames from signal
     
     shape   = (int((signal.shape[0] - window)/shift + 1), window)
-    frames  = np.zeros().astype('float32')
+    #frames  = np.zeros().astype('float32')
+    frames  = np.zeros(shape, dtype='float32')
+
+    #win = np.hamming(window).astype('float32')
 
     ###########################################################
     # Here is your code
-    
+    for i in range(shape[0]):
+        start = i * shift
+        frames[i] = signal[start:start + window] #* win   
     ###########################################################
     
     return frames
@@ -40,7 +58,7 @@ def frame_energy(frames):
 
     ###########################################################
     # Here is your code
-    
+    E = np.sum(frames, axis=1).astype('float32')
     ###########################################################
     
     return E
@@ -52,7 +70,13 @@ def norm_energy(E):
 
     ###########################################################
     # Here is your code
-    
+    E_mean = np.mean(E)
+    E_std = np.std(E, ddof=1)
+
+    #for i in range(len(E)):
+    #    E_norm[i] = (E[i] - E_mean) / E_std
+
+    E_norm = (E - E_mean) / E_std    
     ###########################################################
     
     return E_norm
@@ -66,20 +90,28 @@ def gmm_train(E, gauss_pdf, n_realignment):
     sigma = np.array([ 1.00, 1.00, 1.00])
 
     g = np.zeros([len(E), len(w)])
+    K = 3 
+    M = len(E)
     for n in range(n_realignment):
 
         # E-step
         ###########################################################
         # Here is your code
-
+        for j in range(K):
+            g[:, j] = w[j] * gauss_pdf(E, m[j], sigma[j])
+        # Normalize responsibilities
+        g_sum = np.sum(g, axis=1, keepdims=True)
+        g = g / g_sum
         ###########################################################
 
         # M-step
         ###########################################################
         # Here is your code
-
+        for j in range(K):
+            w[j] = np.sum(g[:, j]) / M
+            m[j] = np.sum(g[:, j] * E) / (M * w[j])
+            sigma[j] = np.sqrt(np.sum(g[:, j] * (E - m[j])**2) / (M * w[j]))
         ###########################################################
-        
     return w, m, sigma
 
 def eval_frame_post_prob(E, gauss_pdf, w, m, sigma):
@@ -88,8 +120,11 @@ def eval_frame_post_prob(E, gauss_pdf, w, m, sigma):
     g0 = np.zeros(len(E))
 
     ###########################################################
-    # Here is your code
-
+    # Here is your code 
+    for i in range(len(E)):
+        numerator = w[0] * gauss_pdf(E[i], m[0], sigma[0]) 
+        denominator = sum(w[j] * gauss_pdf(E[i], m[j], sigma[j]) for j in range(len(w))) 
+        g0[i] = numerator / denominator
     ###########################################################
             
     return g0
@@ -137,7 +172,8 @@ def reverb(signal, impulse_response):
     
     ###########################################################
     # Here is your code
-    
+    conv_res = np.convolve(signal, impulse_response, mode='full')
+    signal_reverb = conv_res[:len(signal)].astype('float32')    
     ###########################################################
     
     return signal_reverb
@@ -149,7 +185,8 @@ def awgn(signal, sigma_noise):
     
     ###########################################################
     # Here is your code
-    
+    noise = np.random.normal(0.0, sigma_noise, size=signal.shape).astype('float32')
+    signal_noise = signal.astype('float32') + noise    
     ###########################################################
     
     return signal_noise
